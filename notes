@@ -1,0 +1,129 @@
+import pandas as pd
+import numpy as np # Used for type checking and potential NaN/inf values
+import statsmodels.api as sm
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from typing import List, Tuple, Any
+
+def reduce_vif(X: pd.DataFrame, threshold: float = 5.0) -> Tuple[pd.DataFrame, List[Tuple[str, float]]]:
+    """
+    Performs automatic feature selection using Variance Inflation Factor (VIF).
+
+    The function iteratively calculates the VIF for each feature, drops the feature
+    with the highest VIF if it exceeds a specified threshold, and repeats the process
+    until all remaining features have a VIF below the threshold.
+
+    Args:
+        X (pd.DataFrame): Input DataFrame containing only numerical features.
+                          A copy will be made to avoid modifying the original.
+        threshold (float): The VIF threshold. Features with VIF values above this
+                           threshold will be considered for removal. Default is 5.0.
+
+    Returns:
+        Tuple[pd.DataFrame, List[Tuple[str, float]]]:
+            - The reduced DataFrame with selected features.
+            - A list of tuples, where each tuple contains (feature_name, VIF_value)
+              for features that were removed during the process, ordered by removal.
+
+    Raises:
+        TypeError: If the input X is not a pandas DataFrame.
+        ValueError: If the DataFrame contains non-numerical columns.
+    """
+    if not isinstance(X, pd.DataFrame):
+        raise TypeError("Input 'X' must be a pandas DataFrame.")
+
+    # Check if all columns are numerical to ensure VIF calculation works as expected.
+    # VIF is defined for numerical features.
+    if not X.select_dtypes(include=np.number).columns.equals(X.columns):
+        raise ValueError("Input DataFrame 'X' must contain only numerical features.")
+
+    df = X.copy() # Work on a copy to preserve the original DataFrame
+    removed_features_log: List[Tuple[str, float]] = []
+
+    # Loop until no features have VIF above the threshold
+    while True:
+        num_features = df.shape[1]
+
+        # Handle edge cases for the number of features
+        if num_features == 0:
+            print("DataFrame is empty. No features left to process.")
+            break
+        if num_features == 1:
+            # VIF is generally 1 for a single feature (no multicollinearity).
+            # We still add a constant for statsmodels to handle it consistently.
+            col_name = df.columns[0]
+            X_const_single = sm.add_constant(df)
+            try:
+                # Calculate VIF for the single remaining feature
+                vif_value = variance_inflation_factor(X_const_single.values, X_const_single.columns.get_loc(col_name))
+                if vif_value <= threshold:
+                    print(f"Only one feature '{col_name}' left with VIF {vif_value:.2f} <= threshold. Stopping.")
+                    break
+                else:
+                    # This case is rare for VIF of a single feature (usually 1), but theoretically possible if threshold < 1
+                    print(f"Only one feature '{col_name}' left with VIF {vif_value:.2f} > threshold. Removing.")
+                    removed_features_log.append((col_name, vif_value))
+                    df = df.drop(columns=[col_name])
+                    break # All features removed
+            except Exception as e:
+                print(f"Could not calculate VIF for single feature '{col_name}'. Error: {e}. Stopping.")
+                break # Cannot proceed if VIF calculation fails for the last feature
+
+        # Add a constant (intercept) term to the DataFrame for VIF calculation.
+        # This is essential for correct VIF interpretation as multicollinearity
+        # is measured in the context of a regression model with an intercept.
+        X_const = sm.add_constant(df)
+
+        # Initialize variables to track the feature with the highest VIF
+        max_vif_feature: str = ''
+        max_vif_value: float = -1.0 # Initialize with a value lower than any possible VIF
+
+        vifs_current_iteration = {} # To store all VIFs calculated in this iteration
+
+        # Calculate VIF for each feature in the current DataFrame
+        for i in range(num_features):
+            col = df.columns[i]
+            try:
+                # Get the column's index within X_const (which includes the 'const' column)
+                vif_value = variance_inflation_factor(X_const.values, X_const.columns.get_loc(col))
+                vifs_current_iteration[col] = vif_value
+
+                if vif_value > max_vif_value:
+                    max_vif_value = vif_value
+                    max_vif_feature = col
+            except np.linalg.LinAlgError as e:
+                # This error often indicates perfect multicollinearity (singular matrix).
+                # In such cases, VIF is theoretically infinite. We treat it as such for removal.
+                print(f"Warning: Perfect multicollinearity detected for '{col}'. VIF set to infinity. Error: {e}")
+                vifs_current_iteration[col] = float('inf')
+                if float('inf') > max_vif_value:
+                    max_vif_value = float('inf')
+                    max_vif_feature = col
+            except Exception as e:
+                # Catch any other unexpected errors during VIF calculation.
+                # If VIF can't be calculated, assume it's problematic and mark for removal.
+                print(f"Warning: Could not calculate VIF for '{col}'. Setting to infinity. Error: {e}")
+                vifs_current_iteration[col] = float('inf')
+                if float('inf') > max_vif_value:
+                    max_vif_value = float('inf')
+                    max_vif_feature = col
+
+        # If for some reason no VIFs were calculated (e.g., all calculations failed)
+        if not vifs_current_iteration:
+            print("No VIFs could be calculated in this iteration. Stopping.")
+            break
+
+        # Check if the highest VIF found in this iteration exceeds the threshold
+        if max_vif_value > threshold:
+            print(f"Removing '{max_vif_feature}' with VIF: {max_vif_value:.2f} (>{threshold:.2f}).")
+            # Log the removed feature and its VIF
+            removed_features_log.append((max_vif_feature, max_vif_value))
+            # Drop the feature from the DataFrame for the next iteration
+            df = df.drop(columns=[max_vif_feature])
+            # The loop continues to re-calculate VIFs for the reduced set of features
+        else:
+            # All remaining features have VIF below or equal to the threshold.
+            # The selection process is complete.
+            print(f"All remaining features have VIF <= {threshold:.2f}. Stopping.")
+            break
+
+    return df, removed_features_log
