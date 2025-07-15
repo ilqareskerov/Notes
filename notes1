@@ -1,0 +1,466 @@
+def plot_classification_model_analysis(model, X_train, X_test, y_train, y_test, model_name="Model", threshold=0.5):
+    """
+    Comprehensive analysis of classification model with advanced metrics
+
+    Parameters:
+    -----------
+    model : estimator object
+        The classification model to evaluate
+    X_train, X_test : array-like
+        Training and test feature data
+    y_train, y_test : array-like
+        Training and test target data
+    model_name : str
+        Name of the model for display purposes
+    threshold : float
+        Decision threshold for binary classification (default: 0.5)
+
+    Returns:
+    --------
+    dict
+        Dictionary containing all evaluation metrics
+    """
+    from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score,
+                                 roc_auc_score, log_loss, confusion_matrix, classification_report,
+                                 precision_recall_curve, roc_curve, average_precision_score, brier_score_loss)
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from sklearn.model_selection import learning_curve
+    from sklearn.calibration import calibration_curve
+
+    plt.style.use('ggplot')
+    fig = plt.figure(figsize=(20, 16))
+
+    # Make predictions
+    try:
+        # For models that support probability predictions
+        y_train_proba = model.predict_proba(X_train)[:,1]
+        y_test_proba = model.predict_proba(X_test)[:,1]
+        y_train_pred = (y_train_proba >= threshold).astype(int)
+        y_test_pred = (y_test_proba >= threshold).astype(int)
+        has_proba = True
+    except (AttributeError, IndexError):
+        # For models that only support class predictions
+        y_train_pred = model.predict(X_train)
+        y_test_pred = model.predict(X_test)
+        y_train_proba = y_train_pred
+        y_test_proba = y_test_pred
+        has_proba = False
+
+    # 1. Learning Curves
+    plt.subplot(3, 3, 1)
+    train_sizes, train_scores, val_scores = learning_curve(
+        model, X_train, y_train, cv=5, n_jobs=-1,
+        train_sizes=np.linspace(0.1, 1.0, 10),
+        scoring='accuracy'
+    )
+
+    train_scores_mean = np.mean(train_scores, axis=1)
+    val_scores_mean = np.mean(val_scores, axis=1)
+
+    plt.plot(train_sizes, train_scores_mean, 'o-', label='Training accuracy')
+    plt.plot(train_sizes, val_scores_mean, 'o-', label='Cross-validation accuracy')
+    plt.xlabel('Training Set Size')
+    plt.ylabel('Accuracy')
+    plt.title('Learning Curves')
+    plt.legend(loc='best')
+
+    # 2. Confusion Matrix for Test Data
+    plt.subplot(3, 3, 2)
+    cm = confusion_matrix(y_test, y_test_pred)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False)
+    plt.xlabel('Predicted Labels')
+    plt.ylabel('True Labels')
+    plt.title('Confusion Matrix (Test Data)')
+
+    # 3. ROC Curve (if probability predictions available)
+    plt.subplot(3, 3, 3)
+    if has_proba:
+        fpr, tpr, _ = roc_curve(y_test, y_test_proba)
+        train_fpr, train_tpr, _ = roc_curve(y_train, y_train_proba)
+        plt.plot(fpr, tpr, label=f'Test (AUC = {roc_auc_score(y_test, y_test_proba):.3f})')
+        plt.plot(train_fpr, train_tpr, label=f'Train (AUC = {roc_auc_score(y_train, y_train_proba):.3f})')
+        plt.plot([0, 1], [0, 1], 'k--')
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('ROC Curve')
+        plt.legend(loc='best')
+    else:
+        plt.text(0.5, 0.5, "Probability predictions not available",
+                 horizontalalignment='center', verticalalignment='center')
+        plt.axis('off')
+
+    # 4. Precision-Recall Curve
+    plt.subplot(3, 3, 4)
+    if has_proba:
+        precision, recall, _ = precision_recall_curve(y_test, y_test_proba)
+        train_precision, train_recall, _ = precision_recall_curve(y_train, y_train_proba)
+        plt.plot(recall, precision,
+                 label=f'Test (AP = {average_precision_score(y_test, y_test_proba):.3f})')
+        plt.plot(train_recall, train_precision,
+                 label=f'Train (AP = {average_precision_score(y_train, y_train_proba):.3f})')
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.title('Precision-Recall Curve')
+        plt.legend(loc='best')
+    else:
+        plt.text(0.5, 0.5, "Probability predictions not available",
+                 horizontalalignment='center', verticalalignment='center')
+        plt.axis('off')
+
+    # 5. Calibration Curve (Reliability Diagram)
+    plt.subplot(3, 3, 5)
+    if has_proba:
+        prob_true, prob_pred = calibration_curve(y_test, y_test_proba, n_bins=10)
+        train_prob_true, train_prob_pred = calibration_curve(y_train, y_train_proba, n_bins=10)
+        plt.plot(prob_pred, prob_true, 's-', label='Test')
+        plt.plot(train_prob_pred, train_prob_true, 's-', label='Train')
+        plt.plot([0, 1], [0, 1], 'k--')
+        plt.xlabel('Mean Predicted Probability')
+        plt.ylabel('Fraction of Positives')
+        plt.title('Calibration Curve')
+        plt.legend(loc='best')
+    else:
+        plt.text(0.5, 0.5, "Probability predictions not available",
+                 horizontalalignment='center', verticalalignment='center')
+        plt.axis('off')
+
+    # 6. Decision Threshold Analysis (for binary classification)
+    plt.subplot(3, 3, 6)
+    if has_proba and len(np.unique(y_test)) == 2:
+        thresholds = np.linspace(0, 1, 100)
+        precisions = []
+        recalls = []
+        f1_scores = []
+        accuracies = []
+
+        for thresh in thresholds:
+            y_pred = (y_test_proba >= thresh).astype(int)
+            precisions.append(precision_score(y_test, y_pred, zero_division=0))
+            recalls.append(recall_score(y_test, y_pred, zero_division=0))
+            f1_scores.append(f1_score(y_test, y_pred, zero_division=0))
+            accuracies.append(accuracy_score(y_test, y_pred))
+
+        plt.plot(thresholds, precisions, label='Precision')
+        plt.plot(thresholds, recalls, label='Recall')
+        plt.plot(thresholds, f1_scores, label='F1 Score')
+        plt.plot(thresholds, accuracies, label='Accuracy')
+        plt.axvline(x=threshold, color='k', linestyle='--', alpha=0.3,
+                    label=f'Current threshold: {threshold}')
+        plt.xlabel('Threshold')
+        plt.ylabel('Score')
+        plt.title('Threshold Analysis')
+        plt.legend(loc='best')
+    else:
+        plt.text(0.5, 0.5, "Requires binary classification with probabilities",
+                 horizontalalignment='center', verticalalignment='center')
+        plt.axis('off')
+
+    # 7. Feature Importance (if available)
+    plt.subplot(3, 3, 7)
+    try:
+        if hasattr(model, 'feature_importances_'):
+            # For tree-based models
+            importances = model.feature_importances_
+            indices = np.argsort(importances)[-15:]  # Top 15 features
+            plt.barh(range(len(indices)), importances[indices])
+            plt.yticks(range(len(indices)), [f"Feature {i}" if isinstance(i, int) else str(i)
+                                             for i in indices])
+            plt.xlabel('Feature Importance')
+            plt.title('Top Feature Importances')
+        elif hasattr(model, 'coef_'):
+            # For linear models
+            coef = model.coef_.ravel()
+            indices = np.argsort(np.abs(coef))[-15:]  # Top 15 features by magnitude
+            plt.barh(range(len(indices)), coef[indices])
+            plt.yticks(range(len(indices)), [f"Feature {i}" if isinstance(i, int) else str(i)
+                                             for i in indices])
+            plt.xlabel('Coefficient Magnitude')
+            plt.title('Top Feature Coefficients')
+        else:
+            plt.text(0.5, 0.5, "Feature importance not available for this model",
+                     horizontalalignment='center', verticalalignment='center')
+            plt.axis('off')
+    except:
+        plt.text(0.5, 0.5, "Error extracting feature importance",
+                 horizontalalignment='center', verticalalignment='center')
+        plt.axis('off')
+
+    # 8. Prediction Distribution
+    plt.subplot(3, 3, 8)
+    if has_proba:
+        sns.histplot(y_train_proba, color='blue', alpha=0.5, bins=50, kde=True, label='Train')
+        sns.histplot(y_test_proba, color='red', alpha=0.5, bins=50, kde=True, label='Test')
+        plt.axvline(x=threshold, color='k', linestyle='--', alpha=0.3)
+        plt.xlabel('Predicted Probability')
+        plt.ylabel('Count')
+        plt.title('Prediction Distribution')
+        plt.legend(loc='best')
+    else:
+        # For non-probability models, show class distribution
+        train_vals, train_counts = np.unique(y_train_pred, return_counts=True)
+        test_vals, test_counts = np.unique(y_test_pred, return_counts=True)
+
+        x = np.arange(len(train_vals))
+        width = 0.35
+
+        plt.bar(x - width/2, train_counts, width, label='Train')
+        plt.bar(x + width/2, test_counts, width, label='Test')
+        plt.xticks(x, train_vals)
+        plt.xlabel('Predicted Class')
+        plt.ylabel('Count')
+        plt.title('Prediction Class Distribution')
+        plt.legend(loc='best')
+
+    # 9. Error Analysis - Misclassification by True Class
+    plt.subplot(3, 3, 9)
+    classes = np.unique(np.concatenate([y_train, y_test]))
+    error_rates = []
+    class_names = []
+
+    for cls in classes:
+        mask = (y_test == cls)
+        if np.sum(mask) > 0:  # Avoid division by zero
+            error_rate = 1 - accuracy_score(y_test[mask], y_test_pred[mask])
+            error_rates.append(error_rate)
+            class_names.append(f"Class {cls}")
+
+    plt.bar(class_names, error_rates)
+    plt.xlabel('True Class')
+    plt.ylabel('Error Rate')
+    plt.title('Error Rate by Class')
+    plt.xticks(rotation=45)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f'{model_name} Classification Analysis', y=0.98, size=16)
+
+    # Calculate advanced metrics
+    metrics = {}
+
+    # Basic metrics
+    metrics['train_accuracy'] = accuracy_score(y_train, y_train_pred)
+    metrics['test_accuracy'] = accuracy_score(y_test, y_test_pred)
+
+    # Class-specific metrics (with handling for multiclass)
+    if len(np.unique(y_test)) == 2:  # Binary classification
+        metrics['train_precision'] = precision_score(y_train, y_train_pred, zero_division=0)
+        metrics['test_precision'] = precision_score(y_test, y_test_pred, zero_division=0)
+        metrics['train_recall'] = recall_score(y_train, y_train_pred, zero_division=0)
+        metrics['test_recall'] = recall_score(y_test, y_test_pred, zero_division=0)
+        metrics['train_f1'] = f1_score(y_train, y_train_pred, zero_division=0)
+        metrics['test_f1'] = f1_score(y_test, y_test_pred, zero_division=0)
+    else:  # Multiclass
+        metrics['train_precision'] = precision_score(y_train, y_train_pred, average='weighted', zero_division=0)
+        metrics['test_precision'] = precision_score(y_test, y_test_pred, average='weighted', zero_division=0)
+        metrics['train_recall'] = recall_score(y_train, y_train_pred, average='weighted', zero_division=0)
+        metrics['test_recall'] = recall_score(y_test, y_test_pred, average='weighted', zero_division=0)
+        metrics['train_f1'] = f1_score(y_train, y_train_pred, average='weighted', zero_division=0)
+        metrics['test_f1'] = f1_score(y_test, y_test_pred, average='weighted', zero_division=0)
+
+    # Advanced metrics (for probability-based models)
+    if has_proba:
+        try:
+            metrics['train_log_loss'] = log_loss(y_train, y_train_proba)
+            metrics['test_log_loss'] = log_loss(y_test, y_test_proba)
+
+            if len(np.unique(y_test)) == 2:  # Binary classification
+                metrics['train_roc_auc'] = roc_auc_score(y_train, y_train_proba)
+                metrics['test_roc_auc'] = roc_auc_score(y_test, y_test_proba)
+                metrics['train_avg_precision'] = average_precision_score(y_train, y_train_proba)
+                metrics['test_avg_precision'] = average_precision_score(y_test, y_test_proba)
+                metrics['train_brier'] = brier_score_loss(y_train, y_train_proba)
+                metrics['test_brier'] = brier_score_loss(y_test, y_test_proba)
+            else:  # Multiclass
+                # For multiclass, we need to handle ROC AUC differently
+                try:
+                    metrics['train_roc_auc'] = roc_auc_score(y_train, model.predict_proba(X_train), multi_class='ovr')
+                    metrics['test_roc_auc'] = roc_auc_score(y_test, model.predict_proba(X_test), multi_class='ovr')
+                except:
+                    # If OvR approach fails, skip this metric
+                    metrics['train_roc_auc'] = "N/A"
+                    metrics['test_roc_auc'] = "N/A"
+        except Exception as e:
+            print(f"Warning: Could not compute some probability-based metrics: {e}")
+
+    # Print comprehensive evaluation report
+    print("\n" + "="*80)
+    print(f"                      {model_name} CLASSIFICATION EVALUATION REPORT")
+    print("="*80)
+
+    print("\n📊 PERFORMANCE METRICS:")
+    print("-"*50)
+    print(f"Accuracy:       Train: {metrics['train_accuracy']:.4f}   |   Test: {metrics['test_accuracy']:.4f}")
+    print(f"Precision:      Train: {metrics['train_precision']:.4f}   |   Test: {metrics['test_precision']:.4f}")
+    print(f"Recall:         Train: {metrics['train_recall']:.4f}   |   Test: {metrics['test_recall']:.4f}")
+    print(f"F1 Score:       Train: {metrics['train_f1']:.4f}   |   Test: {metrics['test_f1']:.4f}")
+
+    if has_proba:
+        try:
+            print(f"ROC AUC:        Train: {metrics['train_roc_auc']:.4f}   |   Test: {metrics['test_roc_auc']:.4f}")
+            print(f"Log Loss:       Train: {metrics['train_log_loss']:.4f}   |   Test: {metrics['test_log_loss']:.4f}")
+
+            if len(np.unique(y_test)) == 2:  # Binary classification
+                print(f"Avg Precision:  Train: {metrics['train_avg_precision']:.4f}   |   Test: {metrics['test_avg_precision']:.4f}")
+                print(f"Brier Score:    Train: {metrics['train_brier']:.4f}   |   Test: {metrics['test_brier']:.4f}")
+        except:
+            pass
+
+    print("\n📋 CLASSIFICATION REPORT (TEST DATA):")
+    print("-"*50)
+    print(classification_report(y_test, y_test_pred))
+
+    # Model fitting analysis
+    print("\n🔍 MODEL FITTING ANALYSIS:")
+    print("-"*50)
+
+    # Calculate metrics for overfitting/underfitting assessment
+    acc_diff = metrics['train_accuracy'] - metrics['test_accuracy']
+    f1_diff = metrics['train_f1'] - metrics['test_f1']
+
+    if has_proba and 'train_log_loss' in metrics:
+        log_loss_ratio = metrics['test_log_loss'] / metrics['train_log_loss'] if metrics['train_log_loss'] > 0 else float('inf')
+    else:
+        log_loss_ratio = None
+
+    # Expert analysis
+    if acc_diff > 0.1 or f1_diff > 0.1 or (log_loss_ratio is not None and log_loss_ratio > 1.3):
+        print("⚠️ Model shows signs of OVERFITTING:")
+        print(f"- Accuracy gap (train-test): {acc_diff:.4f}")
+        print(f"- F1 score gap (train-test): {f1_diff:.4f}")
+        if log_loss_ratio is not None:
+            print(f"- Log Loss ratio (test/train): {log_loss_ratio:.4f}")
+
+        print("\n🔧 RECOMMENDATIONS:")
+        print("1. Implement regularization (L1, L2, ElasticNet)")
+        print("2. Reduce model complexity/depth")
+        print("3. Apply early stopping")
+        print("4. Use dropout or pruning techniques")
+        print("5. Increase training data with augmentation")
+        print("6. Feature selection to reduce dimensionality")
+
+    elif metrics['test_accuracy'] < 0.6 and metrics['train_accuracy'] < 0.7:
+        print("⚠️ Model shows signs of UNDERFITTING:")
+        print(f"- Training accuracy: {metrics['train_accuracy']:.4f}")
+        print(f"- Testing accuracy: {metrics['test_accuracy']:.4f}")
+
+        print("\n🔧 RECOMMENDATIONS:")
+        print("1. Increase model complexity")
+        print("2. Reduce regularization strength")
+        print("3. Feature engineering to create more informative features")
+        print("4. Train for more iterations/epochs")
+        print("5. Try a different model architecture")
+        print("6. Polynomial feature expansion")
+
+    else:
+        print("✅ Model shows GOOD FIT:")
+        print(f"- Accuracy gap (train-test): {acc_diff:.4f}")
+        print(f"- F1 score gap (train-test): {f1_diff:.4f}")
+        if log_loss_ratio is not None:
+            print(f"- Log Loss ratio (test/train): {log_loss_ratio:.4f}")
+
+        print("\n🔍 The model demonstrates a good balance between bias and variance.")
+
+        # Additional insights for well-fitted models
+        if metrics['test_accuracy'] < 0.8:
+            print("\n🔍 While the model is well-balanced, overall performance could be improved:")
+            print("1. Try ensemble methods (boosting, bagging, stacking)")
+            print("2. Advanced feature engineering")
+            print("3. Hyperparameter optimization")
+
+    # Class imbalance check
+    class_counts = np.bincount(y_train.astype(int))
+    class_ratio = np.max(class_counts) / np.min(class_counts)
+
+    if class_ratio > 3:
+        print("\n⚠️ CLASS IMBALANCE DETECTED:")
+        print(f"- Class ratio (majority:minority): {class_ratio:.2f}:1")
+
+        print("\n🔧 RECOMMENDATIONS FOR IMBALANCED DATA:")
+        print("1. Use stratified sampling in cross-validation")
+        print("2. Apply resampling techniques (SMOTE, undersampling)")
+        print("3. Use class weights in the model")
+        print("4. Evaluate with metrics suitable for imbalanced data (F1, AUC, PR-AUC)")
+        print("5. Consider anomaly detection approaches for extreme imbalance")
+
+    # Calibration assessment
+    if has_proba:
+        try:
+            brier = metrics.get('test_brier')
+            if brier is not None and brier > 0.2:
+                print("\n⚠️ MODEL CALIBRATION ISSUE DETECTED:")
+                print(f"- Brier score: {brier:.4f} (lower is better, 0 is perfect)")
+
+                print("\n🔧 CALIBRATION RECOMMENDATIONS:")
+                print("1. Apply Platt Scaling or Isotonic Regression")
+                print("2. Use calibrated models (CalibratedClassifierCV)")
+                print("3. For tree-based models, increase the number of trees")
+                print("4. For neural networks, adjust temperature scaling")
+        except:
+            pass
+
+    # Decision threshold analysis for binary classification
+    if has_proba and len(np.unique(y_test)) == 2:
+        # Find optimal threshold based on F1 score
+        thresholds = np.linspace(0.1, 0.9, 9)
+        f1_scores = []
+
+        for thresh in thresholds:
+            y_pred = (y_test_proba >= thresh).astype(int)
+            f1 = f1_score(y_test, y_pred, zero_division=0)
+            f1_scores.append(f1)
+
+        best_idx = np.argmax(f1_scores)
+        best_threshold = thresholds[best_idx]
+        best_f1 = f1_scores[best_idx]
+
+        if abs(best_threshold - 0.5) > 0.1 and best_f1 > metrics['test_f1']:
+            print("\n💡 THRESHOLD OPTIMIZATION OPPORTUNITY:")
+            print(f"- Current threshold: 0.5, F1 score: {metrics['test_f1']:.4f}")
+            print(f"- Optimal threshold: {best_threshold:.2f}, F1 score: {best_f1:.4f}")
+            print("\nAdjusting the decision threshold could improve model performance.")
+
+    return metrics
+
+
+
+__________________________________________________
+
+from sklearn.base import BaseEstimator, ClassifierMixin
+class ThresholdClassifier(BaseEstimator, ClassifierMixin):
+    def __init__(self, base_classifier, threshold=0.5):
+        self.base_classifier = base_classifier
+        self.threshold = threshold
+
+    def fit(self, X, y):
+        self.base_classifier.fit(X, y)
+        return self
+
+    def predict(self, X):
+        y_prob = self.base_classifier.predict_proba(X)[:, 1]
+        return (y_prob >= self.threshold).astype(int)
+
+    def predict_proba(self, X):
+        return self.base_classifier.predict_proba(X)
+
+    def feature_importances_(self):
+        return self.base_classifier.feature_importances_
+_______________________________________________
+
+# First, train the base model
+# logistic_regression_def.fit(X_train, y_train)
+
+# Then create the ThresholdClassifier with the trained model
+threshold_classifier = ThresholdClassifier(logistic_regression_def, 0.4)
+
+# Now you can use it in your analysis function
+metrics = plot_classification_model_analysis(
+    model=threshold_classifier,
+    X_train=X_train,
+    X_test=X_test,
+    y_train=y_train,
+    y_test=y_test,
+    model_name="LightGBM",
+    threshold = 0.4
+)
